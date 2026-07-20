@@ -1,74 +1,125 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle, ArrowRight, Loader2, X, Upload, FileCheck2 } from 'lucide-react';
-import { useLenders, formatRupiah, Lender } from '../../lib/useLenders';
+import { CheckCircle, ArrowRight, Loader2, X, Upload, History, Search, FileText } from 'lucide-react';
+import { useLenders, formatRupiah, formatThousands, isLenderEligible, Lender } from '../../lib/useLenders';
 import { useAuth } from '../../lib/AuthContext';
 import { useScore } from '../../lib/ScoreContext';
 import { supabase } from '../../lib/supabaseClient';
-import { RiwayatPengajuan } from './RiwayatPengajuan';
+import { RiwayatPengajuan } from './RiwayatPengajuan'; // FIX 3: import komponen riwayat
 
-// Dokumen yang wajib diunggah sebelum pengajuan bisa dikirim.
-// key dipakai sebagai nama field di object `dokumen` (jsonb) pada tabel `applications`.
-const REQUIRED_DOCS: { key: string; label: string }[] = [
-  { key: 'ktp', label: 'KTP Pemilik Usaha' },
-  { key: 'npwp', label: 'NPWP' },
-  { key: 'izin_usaha', label: 'Surat Izin Usaha' },
-  { key: 'rekening_koran', label: 'Rekening Koran 3 Bulan Terakhir' },
-];
+// FIX 4: dokumen tambahan (NPWP, Surat Izin Usaha, Rekening Koran) sekarang
+// beneran bisa diupload, bukan cuma centang statis lagi.
+// Disimpan sebagai satu kolom jsonb `dokumen` di tabel applications
+// (key: ktp, npwp, izin_usaha, rekening_koran) — sesuai skema yang sudah ada,
+// bukan kolom terpisah per dokumen.
+type DocKey = 'npwp' | 'izinUsaha' | 'rekeningKoran';
 
-function parseRupiahInput(raw: string): number {
-  const digits = raw.replace(/[^\d]/g, '');
-  return digits ? parseInt(digits, 10) : 0;
-}
+type DocState = {
+  file: File | null;
+  uploading: boolean;
+  url: string | null;
+  error: string;
+};
+
+const DOC_LABELS: Record<DocKey, string> = {
+  npwp: 'NPWP',
+  izinUsaha: 'Surat Izin Usaha',
+  rekeningKoran: 'Rekening Koran 3 Bulan Terakhir',
+};
+
+// Map key internal komponen -> key yang dipakai di kolom jsonb `dokumen`
+const DOC_JSON_KEYS: Record<DocKey, string> = {
+  npwp: 'npwp',
+  izinUsaha: 'izin_usaha',
+  rekeningKoran: 'rekening_koran',
+};
+
+const EMPTY_DOC_STATE: DocState = { file: null, uploading: false, url: null, error: '' };
 
 function DocumentUploadTile({
   label,
-  file,
+  state,
   onSelect,
 }: {
   label: string;
-  file: File | null;
+  state: DocState;
   onSelect: (file: File) => void;
 }) {
-  const inputId = `doc-${label.replace(/\s+/g, '-')}`;
+  const inputId = `doc-upload-${label.replace(/\s+/g, '-')}`;
+  const done = !!state.url && !state.uploading;
   return (
-    <label
-      htmlFor={inputId}
-      className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-colors ${
-        file ? 'border-[#10B981] bg-green-50' : 'border-dashed border-gray-200 bg-gray-50 hover:bg-gray-100'
-      }`}
-    >
-      {file ? (
-        <FileCheck2 className="w-5 h-5 text-[#10B981] shrink-0" />
-      ) : (
-        <Upload className="w-5 h-5 text-gray-400 shrink-0" />
-      )}
-      <div className="flex-1 min-w-0">
-        <p className="text-gray-900 text-sm font-medium">{label}</p>
-        <p className="text-xs text-gray-500 truncate">
-          {file ? file.name : 'Ketuk untuk unggah (PDF/JPG/PNG)'}
-        </p>
-      </div>
-      <input
-        id={inputId}
-        type="file"
-        accept="application/pdf,image/*"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onSelect(f);
-        }}
-      />
-    </label>
+    <div>
+      <label
+        htmlFor={inputId}
+        className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-colors ${
+          done
+            ? 'border-[#10B981] bg-green-50'
+            : 'border-dashed border-gray-200 bg-gray-50 hover:bg-gray-100'
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          {state.uploading ? (
+            <Loader2 className="w-5 h-5 text-[#1D4ED8] animate-spin shrink-0" />
+          ) : done ? (
+            <CheckCircle className="w-5 h-5 text-[#10B981] shrink-0" />
+          ) : (
+            <FileText className="w-5 h-5 text-gray-400 shrink-0" />
+          )}
+          <div className="min-w-0">
+            <span className="text-sm text-gray-900 block truncate">{label}</span>
+            <span className="text-xs text-gray-500 truncate block">
+              {state.uploading
+                ? 'Mengunggah...'
+                : done
+                ? state.file?.name ?? 'Berhasil diunggah'
+                : 'Ketuk untuk unggah (JPG/PNG/PDF)'}
+            </span>
+          </div>
+        </div>
+        {done && (
+          <a
+            href={state.url!}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs text-[#1D4ED8] underline shrink-0 ml-2"
+          >
+            Lihat
+          </a>
+        )}
+        <input
+          id={inputId}
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onSelect(f);
+          }}
+        />
+      </label>
+      {state.error && <p className="text-red-500 text-xs mt-1 pl-1">{state.error}</p>}
+    </div>
   );
 }
 
-export function Pendana() {
-  const { lenders, loading: lendersLoading } = useLenders();
-  const { umkmProfile } = useAuth();
-  const { result } = useScore();
+// FIX 5: props ini dioper dari App.tsx (lihat handleNavigateToPendana &
+// handleNavigateToRiwayat) supaya tombol-tombol di Beranda.tsx bisa langsung
+// buka tab/lender yang tepat begitu Pendana ini di-mount.
+type PendanaProps = {
+  initialTab?: 'cari' | 'riwayat';
+  initialLenderId?: string;
+  navKey?: number; // berubah tiap kali ada event navigasi baru, walau targetnya sama
+};
 
-  const [activeTab, setActiveTab] = useState<'marketplace' | 'riwayat'>('marketplace');
+export function Pendana({ initialTab, initialLenderId, navKey }: PendanaProps) {
+  const { lenders, loading: lendersLoading } = useLenders();
+  const { umkmProfile, profile } = useAuth();
+  const { result, isHydrating } = useScore();
+
+  // FIX 3: tab switch antara "Cari Pendana" dan "Riwayat Pengajuan"
+  const [activeTab, setActiveTab] = useState<'cari' | 'riwayat'>('cari');
+
   const [activeFilter, setActiveFilter] = useState<'semua' | 'bank' | 'fintech' | 'koperasi'>('semua');
   const [showApplicationModal, setShowApplicationModal] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<Lender | null>(null);
@@ -76,69 +127,156 @@ export function Pendana() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
-  // Nominal yang diajukan diinput manual user saat memilih pendana ini,
-  // bukan lagi otomatis diambil dari hasil Sinkronisasi AI di Profil.
+  // FIX 2: nominal yang mau diajukan sekarang bisa diedit user
   const [nominalInput, setNominalInput] = useState('');
-  const [nominalError, setNominalError] = useState('');
 
-  // Dokumen verifikasi — wajib diunggah sebelum lanjut ke step Review AI.
-  const [docFiles, setDocFiles] = useState<Record<string, File | null>>({});
-  const [docError, setDocError] = useState('');
+  // FIX 4: state upload untuk NPWP, Surat Izin Usaha, Rekening Koran
+  const [docs, setDocs] = useState<Record<DocKey, DocState>>({
+    npwp: { ...EMPTY_DOC_STATE },
+    izinUsaha: { ...EMPTY_DOC_STATE },
+    rekeningKoran: { ...EMPTY_DOC_STATE },
+  });
 
+  // Pengajuan aktif (belum disetujui/ditolak) milik UMKM ini — kalau ada,
+  // UMKM tidak boleh mengajukan pinjaman baru ke lender manapun sampai
+  // pengajuan ini mendapat keputusan. "Aktif" dites dengan BUKAN
+  // disetujui/ditolak, bukan mencocokkan string "menunggu" — nilai default
+  // kolom status yang sebenarnya tersimpan di DB tidak konsisten dipakai di
+  // seluruh codebase ini (ada indikasi 'diajukan' juga dipakai sebagai
+  // default), jadi tes negatif ini lebih aman daripada tebak salah satu.
+  const [pending, setPending] = useState<{ id: string; lenderId: string } | null>(null);
+  const [pendingLoading, setPendingLoading] = useState(true);
+
+  useEffect(() => {
+    if (!umkmProfile) return;
+    let active = true;
+    const checkPending = async () => {
+      setPendingLoading(true);
+      const { data, error } = await supabase
+        .from('applications')
+        .select('id, lender_id, status, created_at')
+        .eq('umkm_id', umkmProfile.id)
+        .order('created_at', { ascending: false });
+
+      if (!active) return;
+      if (error) {
+        console.error('Gagal cek status pengajuan aktif:', error);
+        setPendingLoading(false);
+        return;
+      }
+      const found = (data ?? []).find((a) => a.status !== 'disetujui' && a.status !== 'ditolak');
+      setPending(found ? { id: found.id, lenderId: found.lender_id } : null);
+      setPendingLoading(false);
+    };
+    checkPending();
+    return () => {
+      active = false;
+    };
+  }, [umkmProfile]);
+
+  const handleSelectDoc = async (key: DocKey, file: File) => {
+    if (!umkmProfile) {
+      setDocs((d) => ({ ...d, [key]: { ...d[key], error: 'Profil usaha belum lengkap.' } }));
+      return;
+    }
+    setDocs((d) => ({ ...d, [key]: { file, uploading: true, url: null, error: '' } }));
+
+    const jsonKey = DOC_JSON_KEYS[key];
+    // FIX 4: pakai bucket & pola path yang sama dengan yang sudah dipakai di
+    // production kamu: dokumen-pengajuan/{umkm_id}/{timestamp}-{jsonKey}-{filename}
+    const path = `${umkmProfile.id}/${Date.now()}-${jsonKey}-${file.name}`;
+    const { error: upErr } = await supabase.storage
+      .from('dokumen-pengajuan')
+      .upload(path, file, { upsert: true, contentType: file.type });
+
+    if (upErr) {
+      setDocs((d) => ({
+        ...d,
+        [key]: { file, uploading: false, url: null, error: 'Gagal upload: ' + upErr.message },
+      }));
+      return;
+    }
+
+    const { data: urlData } = supabase.storage.from('dokumen-pengajuan').getPublicUrl(path);
+    setDocs((d) => ({
+      ...d,
+      [key]: { file, uploading: false, url: urlData.publicUrl, error: '' },
+    }));
+  };
+
+  const allDocsUploaded = (['npwp', 'izinUsaha', 'rekeningKoran'] as DocKey[]).every(
+    (k) => !!docs[k].url,
+  );
+
+  // FIX 1: ktpFromSinkronisasi sebelumnya dipakai tapi tidak pernah didefinisikan
+  // -> menyebabkan ReferenceError & blank screen saat masuk ke step 2.
+  // Ambil dari umkmProfile yang sudah diisi lewat OnboardingWizard (ktp_url).
+  const ktpFromSinkronisasi = (umkmProfile as any)?.ktp_url ?? null;
+
+  // Cuma tampilkan lender yang ambang skor FinTrust-nya dipenuhi skor UMKM
+  // saat ini. Kalau belum pernah Sinkronisasi AI, result.completed masih
+  // false dan result.skorAkhir cuma placeholder — jangan dipakai buat filter,
+  // makanya daftar dikosongkan dan diganti ajakan sinkronisasi di render.
+  const eligibleProviders = result.completed
+    ? lenders.filter((p) => isLenderEligible(p, result.skorAkhir))
+    : [];
   const filteredProviders =
-    activeFilter === 'semua' ? lenders : lenders.filter((p) => p.tipe === activeFilter);
+    activeFilter === 'semua' ? eligibleProviders : eligibleProviders.filter((p) => p.tipe === activeFilter);
 
   const handleApplyClick = (provider: Lender) => {
+    // Gerbang tunggal: menutup baik klik tombol "Ajukan Sekarang" langsung
+    // maupun jalur deep-link dari Beranda.tsx (initialLenderId effect di
+    // bawah memanggil fungsi ini langsung, tanpa lewat tombol).
+    if (pending) return;
     setSelectedProvider(provider);
     setApplicationStep(1);
     setSubmitError('');
-    setDocError('');
-    setDocFiles({});
-    // Prefill dari hasil Sinkronisasi AI kalau ada, tapi tetap bisa diubah user
-    setNominalInput(result.danaDiajukan > 0 ? String(result.danaDiajukan) : '');
-    setNominalError('');
+    // FIX 2: default nominal dari hasil Sinkronisasi AI, fallback ke limit lender,
+    // tapi tetap bisa diubah user di step 1.
+    const defaultNominal = result.danaDiajukan > 0 ? result.danaDiajukan : provider.limit_plafon;
+    setNominalInput(String(defaultNominal));
+    setDocs({
+      npwp: { ...EMPTY_DOC_STATE },
+      izinUsaha: { ...EMPTY_DOC_STATE },
+      rekeningKoran: { ...EMPTY_DOC_STATE },
+    });
     setShowApplicationModal(true);
   };
 
-  function validateNominal(): boolean {
-    if (!selectedProvider) return false;
-    const value = parseRupiahInput(nominalInput);
-    if (value <= 0) {
-      setNominalError('Masukkan nominal yang ingin diajukan');
-      return false;
-    }
-    if (value > selectedProvider.limit_plafon) {
-      setNominalError(`Melebihi limit maksimal ${formatRupiah(selectedProvider.limit_plafon)}`);
-      return false;
-    }
-    setNominalError('');
-    return true;
-  }
+  // FIX 5: kalau App.tsx ngirim initialTab (mis. dari tombol "Riwayat" di
+  // Beranda), langsung aktifkan tab itu. `navKey` di dependency supaya efek
+  // ini tetap jalan walau user klik target yang sama berkali-kali.
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab, navKey]);
 
-  function validateDocuments(): boolean {
-    const missing = REQUIRED_DOCS.filter((d) => !docFiles[d.key]);
-    if (missing.length > 0) {
-      setDocError(`Lengkapi dokumen: ${missing.map((d) => d.label).join(', ')}`);
-      return false;
+  // FIX 5: kalau App.tsx ngirim initialLenderId (dari tombol "Ajukan" di
+  // kartu Rekomendasi Pendana), otomatis buka modal pengajuan untuk lender
+  // itu begitu daftar lender selesai dimuat.
+  useEffect(() => {
+    if (!initialLenderId || lendersLoading) return;
+    const lender = lenders.find((l) => l.id === initialLenderId);
+    if (lender) {
+      setActiveTab('cari');
+      handleApplyClick(lender);
     }
-    setDocError('');
-    return true;
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialLenderId, navKey, lendersLoading, lenders]);
+
+  const parsedNominal = Number(nominalInput.replace(/[^\d]/g, '')) || 0;
 
   const handleNextStep = async () => {
-    if (applicationStep === 1) {
-      if (!validateNominal()) return;
-      setApplicationStep(2);
+    if (applicationStep === 2 && !allDocsUploaded) {
+      setSubmitError('Unggah semua dokumen (NPWP, Surat Izin Usaha, Rekening Koran) terlebih dahulu.');
+      return;
+    }
+    if (applicationStep < 3) {
+      setSubmitError('');
+      setApplicationStep(applicationStep + 1);
       return;
     }
 
-    if (applicationStep === 2) {
-      if (!validateDocuments()) return;
-      setApplicationStep(3);
-      return;
-    }
-
-    // Step 3 -> unggah dokumen + kirim pengajuan beneran ke Supabase, baru lanjut ke step 4 (sukses)
+    // Step 3 -> kirim pengajuan beneran ke Supabase, baru lanjut ke step 4 (sukses)
     setIsProcessing(true);
     setSubmitError('');
 
@@ -148,36 +286,40 @@ export function Pendana() {
       return;
     }
 
-    // 1. Unggah semua dokumen ke Supabase Storage (bucket: dokumen-pengajuan)
-    const dokumenUrls: Record<string, string> = {};
-    for (const doc of REQUIRED_DOCS) {
-      const file = docFiles[doc.key];
-      if (!file) continue;
-
-      const path = `${umkmProfile.id}/${Date.now()}-${doc.key}-${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from('dokumen-pengajuan')
-        .upload(path, file, { upsert: true });
-
-      if (uploadError) {
-        setIsProcessing(false);
-        setSubmitError('Gagal mengunggah dokumen: ' + uploadError.message);
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage.from('dokumen-pengajuan').getPublicUrl(path);
-      dokumenUrls[doc.key] = publicUrlData.publicUrl;
+    // Defense-in-depth: modal ini bisa saja sudah terbuka dari sebelum
+    // pengajuan lain berubah status (tab lain, dsb) — cek ulang di sini,
+    // jangan cuma andalkan gerbang di handleApplyClick.
+    if (pending) {
+      setIsProcessing(false);
+      setSubmitError('Anda masih memiliki pengajuan yang menunggu keputusan. Selesaikan itu dulu sebelum mengajukan lagi.');
+      return;
     }
 
-    // 2. Insert pengajuan
-    const { error } = await supabase.from('applications').insert({
-      umkm_id: umkmProfile.id,
-      lender_id: selectedProvider.id,
-      score_id: result.scoreId,
-      nominal_diajukan: parseRupiahInput(nominalInput),
-      dokumen: dokumenUrls,
-      status: 'diajukan',
-    });
+    if (parsedNominal <= 0) {
+      setIsProcessing(false);
+      setSubmitError('Nominal yang diajukan harus diisi.');
+      return;
+    }
+
+    const { data: inserted, error } = await supabase
+      .from('applications')
+      .insert({
+        umkm_id: umkmProfile.id,
+        lender_id: selectedProvider.id,
+        score_id: result.scoreId,
+        // FIX 2: pakai nominal yang diinput user, bukan otomatis lagi
+        nominal_diajukan: parsedNominal,
+        // FIX 4: simpan semua dokumen sebagai satu kolom jsonb `dokumen`,
+        // sesuai skema yang sudah ada di tabel applications kamu.
+        dokumen: {
+          ktp: ktpFromSinkronisasi,
+          npwp: docs.npwp.url,
+          izin_usaha: docs.izinUsaha.url,
+          rekening_koran: docs.rekeningKoran.url,
+        },
+      })
+      .select('id')
+      .single();
 
     setIsProcessing(false);
 
@@ -185,6 +327,12 @@ export function Pendana() {
       console.error('Gagal kirim pengajuan:', error);
       setSubmitError('Pengajuan gagal terkirim: ' + error.message);
       return;
+    }
+
+    // Optimistic: langsung tandai ada pengajuan aktif tanpa nunggu fetch
+    // ulang, supaya begitu balik ke tab "cari" gerbangnya sudah aktif.
+    if (inserted) {
+      setPending({ id: inserted.id, lenderId: selectedProvider.id });
     }
 
     setApplicationStep(4);
@@ -196,38 +344,44 @@ export function Pendana() {
     setSelectedProvider(null);
     setIsProcessing(false);
     setSubmitError('');
-    setDocFiles({});
-    setDocError('');
     setNominalInput('');
-    setNominalError('');
+    setDocs({
+      npwp: { ...EMPTY_DOC_STATE },
+      izinUsaha: { ...EMPTY_DOC_STATE },
+      rekeningKoran: { ...EMPTY_DOC_STATE },
+    });
   };
 
   return (
     <div className="min-h-full bg-gray-50 pb-6">
       {/* Header with safe area */}
-      <div className="bg-white px-6 pt-12 pb-4 border-b border-gray-200 sticky top-0 z-10">
+      <div className="bg-white px-6 pt-12 pb-6 border-b border-gray-200 sticky top-0 z-10">
         <h1 className="text-2xl text-gray-900 mb-4">Mitra Pendana</h1>
 
-        {/* Tabs */}
-        <div className="flex gap-1 bg-gray-100 rounded-xl p-1 mb-4">
-          {[
-            { id: 'marketplace', label: 'Cari Pendana' },
-            { id: 'riwayat', label: 'Riwayat Pengajuan' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as 'marketplace' | 'riwayat')}
-              className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                activeTab === tab.id ? 'bg-white text-[#1D4ED8] shadow-sm' : 'text-gray-500'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        {/* FIX 3: Tab switcher Cari Pendana / Riwayat */}
+        <div className="flex gap-2 mb-4 bg-gray-100 p-1 rounded-full">
+          <button
+            onClick={() => setActiveTab('cari')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-full text-sm font-semibold transition-colors ${
+              activeTab === 'cari' ? 'bg-white text-[#1D4ED8] shadow-sm' : 'text-gray-500'
+            }`}
+          >
+            <Search className="w-4 h-4" />
+            Cari Pendana
+          </button>
+          <button
+            onClick={() => setActiveTab('riwayat')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-full text-sm font-semibold transition-colors ${
+              activeTab === 'riwayat' ? 'bg-white text-[#1D4ED8] shadow-sm' : 'text-gray-500'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            Riwayat
+          </button>
         </div>
 
-        {/* Dynamic Filters - marketplace only */}
-        {activeTab === 'marketplace' && (
+        {/* Dynamic Filters — hanya relevan di tab "Cari Pendana" */}
+        {activeTab === 'cari' && (
           <div className="flex gap-2 overflow-x-auto pb-2">
             {[
               { id: 'semua', label: 'Semua' },
@@ -251,67 +405,110 @@ export function Pendana() {
         )}
       </div>
 
+      {/* FIX 3: render riwayat kalau tab aktif = riwayat */}
       {activeTab === 'riwayat' ? (
         <RiwayatPengajuan />
       ) : (
-        /* Loan Cards */
-        <div className="px-6 pt-6 space-y-4">
-          {lendersLoading ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="w-6 h-6 text-[#1D4ED8] animate-spin" />
-            </div>
-          ) : (
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeFilter}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.3 }}
-                className="space-y-4"
-              >
-                {filteredProviders.map((provider, index) => (
-                  <motion.div
-                    key={provider.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.1 }}
-                    className="bg-white rounded-xl p-5 shadow-sm border border-gray-100"
-                  >
-                    <div className="flex items-start gap-4 mb-4">
-                      <span className="text-4xl">{provider.logo}</span>
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-gray-900 mb-1">{provider.nama}</h3>
-                        <span className="inline-block px-2 py-1 bg-blue-50 text-[#1D4ED8] text-xs rounded-full">
-                          {provider.tipe === 'bank' && 'Bank'}
-                          {provider.tipe === 'fintech' && 'Fintech'}
-                          {provider.tipe === 'koperasi' && 'Koperasi'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex gap-4 mb-4">
-                      <div className="flex-1 bg-gray-50 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">Limit</p>
-                        <p className="font-semibold text-gray-900">{formatRupiah(provider.limit_plafon)}</p>
-                      </div>
-                      <div className="flex-1 bg-gray-50 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">Bunga</p>
-                        <p className="font-semibold text-gray-900">{provider.bunga_rate}</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleApplyClick(provider)}
-                      className="w-full bg-[#1D4ED8] text-white py-3 rounded-xl font-semibold hover:bg-[#1e40af] transition-colors flex items-center justify-center gap-2"
+        <>
+          {/* Loan Cards */}
+          <div className="px-6 pt-6 space-y-4">
+            {lendersLoading || isHydrating || pendingLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="w-6 h-6 text-[#1D4ED8] animate-spin" />
+              </div>
+            ) : pending ? (
+              <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 text-center">
+                <p className="text-sm font-semibold text-[#0F1D3E] mb-1">
+                  Pengajuan Masih Diproses
+                </p>
+                <p className="text-xs text-gray-500 mb-3">
+                  Anda memiliki pengajuan yang masih menunggu keputusan
+                  {(() => {
+                    const lenderName = lenders.find((l) => l.id === pending.lenderId)?.nama;
+                    return lenderName ? ` di ${lenderName}` : '';
+                  })()}
+                  . Pengajuan baru bisa dilakukan setelah pengajuan itu disetujui atau ditolak.
+                </p>
+                <button
+                  onClick={() => setActiveTab('riwayat')}
+                  className="text-xs text-[#1D4ED8] font-semibold underline"
+                >
+                  Lihat Riwayat Pengajuan
+                </button>
+              </div>
+            ) : !result.completed ? (
+              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6 text-center">
+                <p className="text-sm font-semibold text-[#0F1D3E] mb-1">
+                  Selesaikan Sinkronisasi AI Dulu
+                </p>
+                <p className="text-xs text-gray-500">
+                  Daftar pendana yang sesuai dengan skor FinTrust Anda baru bisa ditampilkan
+                  setelah Sinkronisasi AI selesai.
+                </p>
+              </div>
+            ) : filteredProviders.length === 0 ? (
+              <div className="bg-gray-50 border border-gray-100 rounded-2xl p-6 text-center">
+                <p className="text-sm font-semibold text-[#0F1D3E] mb-1">
+                  Belum Ada Pendana yang Sesuai
+                </p>
+                <p className="text-xs text-gray-500">
+                  Skor FinTrust Anda saat ini belum memenuhi ambang minimum pendana yang
+                  tersedia{activeFilter !== 'semua' ? ' untuk kategori ini' : ''}.
+                </p>
+              </div>
+            ) : (
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeFilter}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.3 }}
+                  className="space-y-4"
+                >
+                  {filteredProviders.map((provider, index) => (
+                    <motion.div
+                      key={provider.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      className="bg-white rounded-xl p-5 shadow-sm border border-gray-100"
                     >
-                      Ajukan Sekarang
-                      <ArrowRight className="w-5 h-5" />
-                    </button>
-                  </motion.div>
-                ))}
-              </motion.div>
-            </AnimatePresence>
-          )}
-        </div>
+                      <div className="flex items-start gap-4 mb-4">
+                        <span className="text-4xl">{provider.logo}</span>
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-gray-900 mb-1">{provider.nama}</h3>
+                          <span className="inline-block px-2 py-1 bg-blue-50 text-[#1D4ED8] text-xs rounded-full">
+                            {provider.tipe === 'bank' && 'Bank'}
+                            {provider.tipe === 'fintech' && 'Fintech'}
+                            {provider.tipe === 'koperasi' && 'Koperasi'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-4 mb-4">
+                        <div className="flex-1 bg-gray-50 rounded-lg p-3">
+                          <p className="text-xs text-gray-500 mb-1">Limit</p>
+                          <p className="font-semibold text-gray-900">{formatRupiah(provider.limit_plafon)}</p>
+                        </div>
+                        <div className="flex-1 bg-gray-50 rounded-lg p-3">
+                          <p className="text-xs text-gray-500 mb-1">Bunga</p>
+                          <p className="font-semibold text-gray-900">{provider.bunga_rate}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleApplyClick(provider)}
+                        className="w-full bg-[#1D4ED8] text-white py-3 rounded-xl font-semibold hover:bg-[#1e40af] transition-colors flex items-center justify-center gap-2"
+                      >
+                        Ajukan Sekarang
+                        <ArrowRight className="w-5 h-5" />
+                      </button>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              </AnimatePresence>
+            )}
+          </div>
+        </>
       )}
 
       {/* Application Bottom Sheet Modal */}
@@ -330,7 +527,7 @@ export function Pendana() {
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 300 }}
               className="fixed bottom-0 left-0 right-0 max-w-[393px] mx-auto bg-white rounded-t-3xl z-50 overflow-hidden"
-              style={{ height: '75vh' }}
+              style={{ height: '70vh' }}
             >
               {/* Header */}
               <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
@@ -358,7 +555,7 @@ export function Pendana() {
               </div>
 
               {/* Content */}
-              <div className="p-6 overflow-y-auto" style={{ height: 'calc(75vh - 160px)' }}>
+              <div className="p-6 overflow-y-auto" style={{ height: 'calc(70vh - 120px)' }}>
                 {applicationStep === 1 && (
                   <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
                     <h3 className="text-xl font-semibold text-gray-900 mb-4">Ringkasan Pinjaman</h3>
@@ -376,43 +573,30 @@ export function Pendana() {
                         <p className="font-semibold text-gray-900">{selectedProvider.bunga_rate}</p>
                       </div>
 
-                      {/* Input nominal - diisi manual user di sini, bukan otomatis dari Profil */}
-                      <div>
-                        <label className="text-sm font-semibold text-gray-900 mb-2 block">
-                          Nominal yang Diajukan
+                      {/* FIX 2: input nominal yang bisa diedit user, bukan cuma teks statis */}
+                      <div className="bg-blue-50 rounded-xl p-4">
+                        <label className="text-sm text-blue-700 mb-1 block">
+                          Nominal yang Diajukan (Rp)
                         </label>
-                        <div
-                          className={`flex items-center gap-2 bg-gray-50 rounded-xl px-4 py-3.5 border-2 transition-colors ${
-                            nominalError ? 'border-red-400' : 'border-transparent focus-within:border-[#1D4ED8]'
-                          }`}
-                        >
-                          <span className="text-gray-400 text-sm shrink-0">Rp</span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={nominalInput ? Number(nominalInput).toLocaleString('id-ID') : ''}
-                            onChange={(e) => {
-                              setNominalInput(String(parseRupiahInput(e.target.value)));
-                              setNominalError('');
-                            }}
-                            placeholder="0"
-                            className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                          />
-                        </div>
-                        {nominalError ? (
-                          <p className="text-red-500 text-xs mt-1 pl-1">{nominalError}</p>
-                        ) : (
-                          <p className="text-xs text-gray-400 mt-1 pl-1">
-                            Maksimal {formatRupiah(selectedProvider.limit_plafon)}
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formatThousands(nominalInput)}
+                          onChange={(e) => setNominalInput(e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="cth. 5.000.000"
+                          className="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-sm font-semibold text-blue-900 outline-none focus:border-[#1D4ED8]"
+                        />
+                        {parsedNominal > selectedProvider.limit_plafon && (
+                          <p className="text-xs text-red-600 mt-1">
+                            Nominal melebihi limit maksimal {formatRupiah(selectedProvider.limit_plafon)}.
+                          </p>
+                        )}
+                        {result.danaDiajukan > 0 && (
+                          <p className="text-xs text-blue-700/70 mt-1">
+                            Rekomendasi dari Sinkronisasi AI: {formatRupiah(result.danaDiajukan)}
                           </p>
                         )}
                       </div>
-
-                      {result.danaDiajukan > 0 && (
-                        <p className="text-xs text-blue-700 bg-blue-50 rounded-lg p-3">
-                          Nominal awal terisi otomatis dari hasil Sinkronisasi AI terakhir Anda — silakan ubah sesuai kebutuhan.
-                        </p>
-                      )}
                     </div>
                   </motion.div>
                 )}
@@ -421,26 +605,54 @@ export function Pendana() {
                   <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
                     <h3 className="text-xl font-semibold text-gray-900 mb-2">Verifikasi Dokumen</h3>
                     <p className="text-sm text-gray-500 mb-4">
-                      Unggah dokumen berikut untuk melanjutkan pengajuan.
+                      KTP sudah terverifikasi otomatis dari Sinkronisasi AI.
                     </p>
+
+                    {/* KTP — otomatis dari Sinkronisasi AI */}
+                    <div className="mb-3">
+                      {ktpFromSinkronisasi ? (
+                        <div className="flex items-center gap-3 p-4 rounded-xl border-2 border-[#10B981] bg-green-50">
+                          <CheckCircle className="w-5 h-5 text-[#10B981] shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900">KTP Pemilik Usaha</p>
+                            <p className="text-xs text-[#10B981]">Terverifikasi dari Sinkronisasi AI ✓</p>
+                          </div>
+                          <a
+                            href={ktpFromSinkronisasi}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-[#1D4ED8] underline shrink-0"
+                          >
+                            Lihat
+                          </a>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3 p-4 rounded-xl border-2 border-amber-300 bg-amber-50">
+                          <Upload className="w-5 h-5 text-amber-500 shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900">KTP Pemilik Usaha</p>
+                            <p className="text-xs text-amber-700">
+                              Belum ada — selesaikan Sinkronisasi AI di tab Profil dulu
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* FIX 4: Dokumen tambahan — upload sungguhan, bukan centang statis */}
                     <div className="space-y-3">
-                      {REQUIRED_DOCS.map((doc) => (
+                      {(['npwp', 'izinUsaha', 'rekeningKoran'] as DocKey[]).map((key) => (
                         <DocumentUploadTile
-                          key={doc.key}
-                          label={doc.label}
-                          file={docFiles[doc.key] ?? null}
-                          onSelect={(file) =>
-                            setDocFiles((prev) => {
-                              setDocError('');
-                              return { ...prev, [doc.key]: file };
-                            })
-                          }
+                          key={key}
+                          label={DOC_LABELS[key]}
+                          state={docs[key]}
+                          onSelect={(file) => handleSelectDoc(key, file)}
                         />
                       ))}
                     </div>
-                    {docError && (
+                    {submitError && (
                       <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3 mt-4">
-                        {docError}
+                        {submitError}
                       </p>
                     )}
                   </motion.div>
@@ -452,7 +664,7 @@ export function Pendana() {
                     {isProcessing ? (
                       <div className="flex flex-col items-center justify-center py-12">
                         <Loader2 className="w-12 h-12 text-[#1D4ED8] animate-spin mb-4" />
-                        <p className="text-gray-600">Mengunggah dokumen & mengirim pengajuan...</p>
+                        <p className="text-gray-600">Mengirim pengajuan...</p>
                       </div>
                     ) : (
                       <div className="space-y-4">
@@ -470,10 +682,8 @@ export function Pendana() {
                           </div>
                         </div>
                         <div className="bg-gray-50 rounded-xl p-4">
-                          <p className="text-sm text-gray-600 mb-1">Nominal Diajukan</p>
-                          <p className="font-semibold text-gray-900">
-                            {formatRupiah(parseRupiahInput(nominalInput))}
-                          </p>
+                          <p className="text-sm text-gray-600 mb-1">Nominal yang Diajukan</p>
+                          <p className="font-semibold text-gray-900">{formatRupiah(parsedNominal)}</p>
                         </div>
                         <div className="bg-gray-50 rounded-xl p-4">
                           <p className="text-sm text-gray-600 mb-1">Estimasi Persetujuan</p>
@@ -509,7 +719,7 @@ export function Pendana() {
                     </p>
                     <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-4">
                       <p className="text-sm text-gray-900 text-center">
-                        Cek status pengajuan Anda kapan saja di tab "Riwayat Pengajuan"
+                        Kami akan mengirimkan notifikasi setelah pengajuan Anda diproses
                       </p>
                     </div>
                   </motion.div>
@@ -521,7 +731,11 @@ export function Pendana() {
                 {applicationStep < 4 ? (
                   <button
                     onClick={handleNextStep}
-                    disabled={isProcessing}
+                    disabled={
+                      isProcessing ||
+                      (applicationStep === 1 && parsedNominal <= 0) ||
+                      (applicationStep === 2 && !allDocsUploaded)
+                    }
                     className="w-full bg-[#1D4ED8] text-white py-3 rounded-xl font-semibold hover:bg-[#1e40af] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {isProcessing ? (
@@ -538,13 +752,10 @@ export function Pendana() {
                   </button>
                 ) : (
                   <button
-                    onClick={() => {
-                      handleCloseModal();
-                      setActiveTab('riwayat');
-                    }}
+                    onClick={handleCloseModal}
                     className="w-full bg-[#1D4ED8] text-white py-3 rounded-xl font-semibold hover:bg-[#1e40af] transition-colors"
                   >
-                    Lihat Riwayat Pengajuan
+                    Selesai
                   </button>
                 )}
               </div>

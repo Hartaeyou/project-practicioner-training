@@ -13,7 +13,13 @@ export type Lender = {
   limit_plafon: number;
   bunga_rate: string;
   logo: string;
+  min_fintrust_score: number | null;
 };
+
+// null/belum diatur lender = tanpa ambang, semua skor lolos.
+export function isLenderEligible(lender: Lender, skorAkhir: number): boolean {
+  return skorAkhir >= (lender.min_fintrust_score ?? 0);
+}
 
 export function useLenders() {
   const [lenders, setLenders] = useState<Lender[]>([]);
@@ -48,4 +54,13 @@ export function useLenders() {
 export function formatRupiah(n: number): string {
   if (n >= 1_000_000) return `Rp ${Math.round(n / 1_000_000)} Juta`;
   return `Rp ${n.toLocaleString('id-ID')}`;
+}
+
+// Format nominal saat diketik (mis. "5000000" -> "5.000.000") supaya user
+// langsung lihat berapa uang yang mereka masukkan. State pemanggil tetap
+// menyimpan digit mentah — cuma tampilan input yang diformat.
+export function formatThousands(raw: string | number): string {
+  const digits = String(raw).replace(/\D/g, '');
+  if (!digits) return '';
+  return Number(digits).toLocaleString('id-ID');
 }

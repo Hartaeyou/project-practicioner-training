@@ -13,3 +13,9 @@ build/
 .DS_Store
 .vscode/
 *.log
+
+# tool output
+app/graphify-out/
+
+# office lock files
+.~lock.*#

@@ -19,6 +19,13 @@ export type UmkmProfile = {
   nama_usaha: string;
   sektor: string | null;
   omzet_estimasi: string | null;
+  alamat?: string | null;
+  lama_usaha_bulan?: number | null;
+  ktp_url?: string | null;
+  selfie_url?: string | null;
+  omzet_manual_juta_per_bulan?: number | null;
+  omzet_manual_frekuensi_per_bulan?: number | null;
+  omzet_manual_bukti_url?: string | null;
 };
 
 type AuthContextType = {
@@ -155,11 +162,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Dipanggil manual setelah Register.tsx selesai insert umkm_profiles,
   // supaya AuthContext langsung punya data terbaru tanpa nunggu refresh halaman.
-  async function refreshProfile() {
-    if (session?.user) {
-      await loadProfile(session.user.id);
+  // Pakai getUser() (bukan state `session`) karena saat baru daftar, closure
+  // submit() di Register.tsx masih terikat ke render lama dengan session null.
+  const refreshProfile = useCallback(async () => {
+    const { data } = await supabase.auth.getUser();
+    if (data.user) {
+      await loadProfile(data.user.id);
     }
-  }
+  }, [loadProfile]);
 
   return (
     <AuthContext.Provider value={{ session, profile, umkmProfile, loading, signOut, refreshProfile }}>

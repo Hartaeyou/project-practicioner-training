@@ -1,16 +1,23 @@
-import { Outlet, NavLink } from 'react-router';
-import { LayoutDashboard, Database, Network, CheckCircle, Settings, Search, Bell, User } from 'lucide-react';
+import { Outlet, NavLink, useNavigate } from 'react-router';
+import { LayoutDashboard, Database, CheckCircle, Settings, Search, Bell, User, LogOut } from 'lucide-react';
 import { useState } from 'react';
+import { useAuth } from '../../lib/AuthContext';
 
 const menuItems = [
   { id: 'dashboard', label: 'Dasbor Utama', icon: LayoutDashboard, path: '/' },
   { id: 'insights', label: 'Wawasan Data Alternatif', icon: Database, path: '/wawasan-data' },
-  { id: 'network', label: 'Analisis Jaringan Kepercayaan', icon: Network, path: '/analisis-jaringan' },
   { id: 'settings', label: 'Pengaturan', icon: Settings, path: '/pengaturan' },
 ];
 
 export default function DashboardLayout() {
   const [searchQuery, setSearchQuery] = useState('');
+  const { lenderProfile, signOut } = useAuth();
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    await signOut();
+    navigate('/login');
+  }
 
   return (
     <div className="flex h-screen bg-[#F9FAFB]">
@@ -52,14 +59,26 @@ export default function DashboardLayout() {
 
         {/* User Profile */}
         <div className="p-4 border-t border-gray-200">
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <div className="w-9 h-9 bg-gradient-to-br from-[#10B981] to-[#059669] rounded-full flex items-center justify-center">
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors">
+            <div className="w-9 h-9 bg-gradient-to-br from-[#10B981] to-[#059669] rounded-full flex items-center justify-center shrink-0">
               <User className="w-5 h-5 text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">Admin User</p>
-              <p className="text-xs text-gray-500 truncate">admin@fintrust.id</p>
+              <p className="text-sm font-medium text-gray-900 truncate">
+                {lenderProfile?.fullName || lenderProfile?.lender.nama || 'Pengguna'}
+              </p>
+              <p className="text-xs text-gray-500 truncate">
+                {lenderProfile?.jabatan ? `${lenderProfile.jabatan} · ` : ''}
+                {lenderProfile?.lender.nama}
+              </p>
             </div>
+            <button
+              onClick={handleLogout}
+              title="Keluar"
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </aside>

@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   TrendingUp,
   X,
+  MapPin,
+  CalendarDays,
 } from "lucide-react";
 import { supabase } from "../../../lib/supabaseClient";
 import { useAuth } from "../../../lib/AuthContext";
@@ -224,6 +226,8 @@ function Step2({
     businessType: string;
     revenue: string;
     phone: string;
+    address: string;
+    businessDuration: string;
   };
   onChange: (k: string, v: string) => void;
   errors: Record<string, string>;
@@ -250,6 +254,26 @@ function Step2({
         type="tel"
       />
 
+      <FieldInput
+        label="Alamat"
+        icon={<MapPin size={17} className="text-gray-400" />}
+        value={data.address}
+        onChange={(v) => onChange("address", v)}
+        placeholder="Masukkan alamat usaha"
+        error={errors.address}
+        type="text"
+      />
+
+      <FieldInput
+        label="Lama Usaha (dalam bulan)"
+        icon={<CalendarDays size={17} className="text-gray-400" />}
+        value={data.businessDuration}
+        onChange={(v) => onChange("businessDuration", v.replace(/[^\d]/g, ""))}
+        placeholder="Misal: 12"
+        error={errors.businessDuration}
+        type="tel"
+      />
+      
       <div>
         <label className="text-[#0F1D3E] font-semibold text-sm mb-2 block">
           Jenis Usaha
@@ -324,6 +348,8 @@ function Step3({
     businessType: string;
     revenue: string;
     phone: string;
+    address: string;
+    businessDuration: string;
   };
   agreed: boolean;
   setAgreed: (v: boolean) => void;
@@ -355,6 +381,18 @@ function Step3({
             <span className="text-gray-500">Nomor HP Usaha</span>
             <span className="text-[#0F1D3E] font-medium">
               {form.phone || "-"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Alamat</span>
+            <span className="text-[#0F1D3E] font-medium text-right max-w-[60%]">
+              {form.address || "-"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Lama Usaha</span>
+            <span className="text-[#0F1D3E] font-medium">
+              {form.businessDuration ? `${form.businessDuration} Bulan` : "-"}
             </span>
           </div>
           <div className="flex justify-between">
@@ -501,6 +539,8 @@ export function Register({ onBack, onSwitchToLogin }: RegisterProps) {
     businessType: "",
     revenue: "",
     phone: "",
+    address: "",
+    businessDuration: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -528,6 +568,8 @@ export function Register({ onBack, onSwitchToLogin }: RegisterProps) {
     const e: Record<string, string> = {};
     if (!form.businessName.trim()) e.businessName = "Nama usaha harus diisi";
     if (!form.phone || form.phone.length < 10) e.phone = "Nomor HP tidak valid";
+    if (!form.address.trim()) e.address = "Alamat harus diisi";
+    if (!form.businessDuration) e.businessDuration = "Lama usaha harus diisi";
     if (!form.businessType) e.businessType = "Pilih jenis usaha";
     if (!form.revenue) e.revenue = "Pilih estimasi omzet";
     return e;
@@ -558,6 +600,8 @@ export function Register({ onBack, onSwitchToLogin }: RegisterProps) {
         businessName: form.businessName,
         businessType: form.businessType,
         revenue: form.revenue,
+        address: form.address,
+        businessDuration: form.businessDuration,
       })
     );
 
@@ -618,6 +662,8 @@ export function Register({ onBack, onSwitchToLogin }: RegisterProps) {
       nama_usaha: form.businessName,
       sektor: form.businessType,
       omzet_estimasi: form.revenue,
+      alamat: form.address,
+      lama_usaha_bulan: parseInt(form.businessDuration) || 0,
     });
 
     if (umkmError) {
@@ -778,6 +824,8 @@ export function Register({ onBack, onSwitchToLogin }: RegisterProps) {
                   businessType: form.businessType,
                   revenue: form.revenue,
                   phone: form.phone,
+                  address: form.address,
+                  businessDuration: form.businessDuration,
                 }}
                 onChange={update}
                 errors={errors}
